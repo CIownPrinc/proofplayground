@@ -1,10 +1,14 @@
 import { Mail } from "lucide-react";
+import { AchievementNotebook } from "@/components/achievement-notebook";
 import { FaceAvatar } from "@/components/face-avatar";
 import { PillPlaceholder } from "@/components/pill-placeholder";
 
 export function SiteHeader() {
   return (
     <header className="relative flex flex-col items-center gap-3 pt-16 pb-10 text-center sm:pt-20 sm:pb-14">
+      <div className="absolute top-6 left-0">
+        <AchievementNotebook />
+      </div>
       <div className="absolute top-6 right-0">
         <PillPlaceholder icon={Mail} label="Get updates" />
       </div>

@@ -21,7 +21,6 @@
 /build
 
 # misc
-.DS_Store
 *.pem
 
 # debug
@@ -30,7 +29,12 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files — ANY file starting with .env is ignored (.env, .env.local,
+# .env.production, .env.development.local, etc). This is the main place API
+# keys, database URLs, and other secrets end up in a Next.js project, so this
+# pattern is intentionally broad. If a specific env file is ever safe and
+# meant to be shared (e.g. a committed .env.example with no real values),
+# re-allow it explicitly below with a `!` line instead of narrowing this rule.
 .env*
 
 # vercel
@@ -39,3 +43,20 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# OS-generated cruft (Windows/macOS file-manager metadata — never useful in git)
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# editor/IDE local settings — machine-specific, not project config
+.vscode/
+.idea/
+*.swp
+
+# local tooling config that can carry secrets (API keys for MCP servers,
+# machine-specific permission grants) — safe to ignore even though neither
+# exists in this repo yet, so a future local file never gets committed by accident
+.claude/settings.local.json
+.mcp.json
