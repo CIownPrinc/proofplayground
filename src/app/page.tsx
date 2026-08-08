@@ -27,7 +27,7 @@ const FEATURED_GAMES: Record<
     href: "/games/birthday-problem",
     title: "The 23rd Guest",
     description: "How can 23 people make a shared birthday likely?",
-    thumbnailSrc: "/games/birthday-problem/garden-party-paper.png",
+    thumbnailSrc: "/games/birthday-problem/homepage-banner.png",
   },
 };
 
