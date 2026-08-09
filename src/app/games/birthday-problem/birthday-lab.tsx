@@ -1,23 +1,30 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, PartyPopper, RotateCcw, Sparkles } from "lucide-react";
+import Image from "next/image";
+import { Cake, ChevronRight, PartyPopper, RotateCcw, Sparkles, UserPlus } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { unlockAchievement } from "@/hooks/use-achievements";
+import { cn } from "@/lib/utils";
 
 import {
   distributionFor,
   drawBirthday,
+  exactCollisionProbability,
+  exactUniformCollisionProbability,
   labelForDay,
   simulateBirthdayRooms,
   type BirthdayDistribution,
 } from "./birthday-math";
 
+const GUESS_ANCHORS = [10, 23, 50, 100, 182, 365] as const;
+
 const NAMES = [
   "Maya", "Theo", "Jules", "Noor", "Sam", "Inez", "Parker", "Kai", "Bri", "Omar", "Wren", "Zoe",
   "Rory", "June", "Milo", "Ari", "Cleo", "Ben", "Tess", "Leo", "Nia", "Max", "Elle", "Sol",
 ];
-const CARD_COLORS = ["#ffe07b", "#b7e5ff", "#f9b7d0", "#c6f0cb", "#d8c5ff", "#ffc898"];
+const CARD_TILES = ["bg-tile-1", "bg-tile-3", "bg-tile-4", "bg-tile-5", "bg-tile-6", "bg-tile-2"];
 const GUEST_SPRITE_POSITIONS = ["0% 0%", "50% 0%", "100% 0%", "0% 100%", "50% 100%", "100% 100%"];
 const PARTY_MOMENTS = [
   "The cake is on the table. The doorbell is waiting.",
@@ -30,15 +37,16 @@ const PARTY_MOMENTS = [
   "brought streamers. The lawn is getting festive.",
 ] as const;
 const PARTY_SPOTS = [
-  { left: "10%", top: "12%" }, { left: "28%", top: "9%" }, { left: "46%", top: "14%" },
-  { left: "64%", top: "10%" }, { left: "12%", top: "36%" }, { left: "30%", top: "32%" },
-  { left: "48%", top: "37%" }, { left: "66%", top: "32%" }, { left: "5%", top: "59%" },
-  { left: "22%", top: "56%" }, { left: "40%", top: "61%" }, { left: "58%", top: "57%" },
-  { left: "74%", top: "56%" }, { left: "14%", top: "79%" }, { left: "32%", top: "76%" },
-  { left: "50%", top: "81%" }, { left: "68%", top: "76%" }, { left: "83%", top: "35%" },
-  { left: "80%", top: "15%" }, { left: "2%", top: "29%" }, { left: "38%", top: "21%" },
-  { left: "56%", top: "23%" }, { left: "74%", top: "70%" },
+  { left: "10%", top: "12%" }, { left: "29%", top: "9%" }, { left: "48%", top: "15%" },
+  { left: "67%", top: "10%" }, { left: "13%", top: "38%" }, { left: "32%", top: "34%" },
+  { left: "51%", top: "39%" }, { left: "70%", top: "34%" }, { left: "6%", top: "62%" },
+  { left: "24%", top: "59%" }, { left: "43%", top: "64%" }, { left: "61%", top: "60%" },
+  { left: "78%", top: "58%" }, { left: "16%", top: "84%" }, { left: "35%", top: "81%" },
+  { left: "54%", top: "86%" }, { left: "72%", top: "81%" }, { left: "86%", top: "37%" },
+  { left: "83%", top: "16%" }, { left: "2%", top: "30%" }, { left: "41%", top: "22%" },
+  { left: "60%", top: "24%" }, { left: "78%", top: "72%" },
 ] as const;
+
 interface Guest {
   name: string;
   birthday: number;
@@ -54,10 +62,65 @@ function matchingDays(guests: Guest[]) {
   return new Set([...counts].filter(([, count]) => count > 1).map(([day]) => day));
 }
 
-function Face({ index }: { index: number }) {
+// The first two guests whose birthdays collide — used to pick out one line
+// in the web of connections below instead of leaving the payoff as text.
+function findMatchedPair(guests: Guest[]): [number, number] | null {
+  const seen = new Map<number, number>();
+  for (let i = 0; i < guests.length; i += 1) {
+    const day = guests[i]!.birthday;
+    const firstIndex = seen.get(day);
+    if (firstIndex !== undefined) return [firstIndex, i];
+    seen.set(day, i);
+  }
+  return null;
+}
+
+// The actual "why" — every guest checks against every earlier guest, so the
+// number of live comparisons grows as a web, not a list. Drawn live as
+// guests arrive, this is the pairs-not-people effect made visible instead of
+// asserted in a sentence about "253 possible pairs."
+function ConnectionsWeb({ guests, matchedPair }: { guests: Guest[]; matchedPair: [number, number] | null }) {
+  const matchKey = matchedPair ? `${matchedPair[0]}-${matchedPair[1]}` : null;
+  return (
+    <svg
+      className="pointer-events-none absolute inset-0 size-full"
+      viewBox="0 0 100 100"
+      preserveAspectRatio="none"
+      aria-hidden
+    >
+      {guests.map((_, i) =>
+        guests.slice(i + 1).map((_, offset) => {
+          const j = i + 1 + offset;
+          const key = `${i}-${j}`;
+          const a = PARTY_SPOTS[i]!;
+          const b = PARTY_SPOTS[j]!;
+          const isMatchLine = key === matchKey;
+          return (
+            <line
+              key={key}
+              x1={parseFloat(a.left)}
+              y1={parseFloat(a.top)}
+              x2={parseFloat(b.left)}
+              y2={parseFloat(b.top)}
+              stroke={isMatchLine ? "var(--brand)" : "var(--foreground)"}
+              strokeWidth={isMatchLine ? 2.5 : 1}
+              opacity={isMatchLine ? 0.9 : 0.12}
+              vectorEffect="non-scaling-stroke"
+            />
+          );
+        }),
+      )}
+    </svg>
+  );
+}
+
+// The character sheet is a 3x2 grid of square cells, so the crop box must
+// stay square too — a non-square box here is what made guests look smeared
+// rather than just small.
+function Face({ index, className }: { index: number; className?: string }) {
   return (
     <span
-      className="block h-16 w-14 bg-[length:300%_200%] bg-no-repeat"
+      className={cn("block shrink-0 bg-[length:300%_200%] bg-no-repeat", className)}
       style={{
         backgroundImage: "url('/games/birthday-problem/party-guests.png')",
         backgroundPosition: GUEST_SPRITE_POSITIONS[index % GUEST_SPRITE_POSITIONS.length],
@@ -71,14 +134,26 @@ export function BirthdayLab() {
   const [distribution, setDistribution] = useState<BirthdayDistribution>("uniform");
   const [guests, setGuests] = useState<Guest[]>([]);
   const [started, setStarted] = useState(false);
+  const [guessCount, setGuessCount] = useState<number | null>(null);
+  const [matchedAt, setMatchedAt] = useState<number | null>(null);
   const [sample, setSample] = useState<{ rate: number; rooms: number } | null>(null);
+  const [exploreSize, setExploreSize] = useState(23);
 
   const weights = useMemo(() => distributionFor(distribution), [distribution]);
   const matches = useMemo(() => matchingDays(guests), [guests]);
+  const matchedPair = useMemo(() => findMatchedPair(guests), [guests]);
   const hasMatch = matches.size > 0;
   const pairCount = (guests.length * (guests.length - 1)) / 2;
+  const lessonSize = matchedAt ?? guests.length;
+  const canContinueLesson = hasMatch || guests.length >= 23;
   const nextSpot = PARTY_SPOTS[Math.min(guests.length, PARTY_SPOTS.length - 1)]!;
   const newestGuest = guests.at(-1);
+  const explorePct = useMemo(() => exactUniformCollisionProbability(exploreSize), [exploreSize]);
+  const explorePairCount = (exploreSize * (exploreSize - 1)) / 2;
+  const realWorld23Pct = useMemo(
+    () => exactCollisionProbability(23, distributionFor("us-pattern")),
+    [],
+  );
 
   useEffect(() => {
     if (hasMatch) unlockAchievement("birthday-lab-match");
@@ -89,25 +164,30 @@ export function BirthdayLab() {
   }, [guests.length]);
 
   function startParty() {
+    if (guessCount === null) return;
     setStarted(true);
+    setMatchedAt(null);
     setGuests([{ name: "You", birthday: drawBirthday(weights) }]);
     setSample(null);
   }
 
   function inviteGuests(amount: number) {
-    setGuests((current) => {
-      const openSeats = Math.max(0, 75 - current.length);
-      const next = [...current];
-      for (let i = 0; i < Math.min(amount, openSeats); i += 1) {
-        const index = next.length;
-        next.push({ name: NAMES[(index - 1) % NAMES.length]!, birthday: drawBirthday(weights) });
-      }
-      return next;
-    });
+    const openSeats = Math.max(0, 75 - guests.length);
+    const next = [...guests];
+    for (let i = 0; i < Math.min(amount, openSeats); i += 1) {
+      const index = next.length;
+      next.push({ name: NAMES[(index - 1) % NAMES.length]!, birthday: drawBirthday(weights) });
+    }
+    setGuests(next);
+    if (matchedAt === null && matchingDays(next).size > 0) {
+      setMatchedAt(next.length);
+    }
   }
 
   function resetParty() {
     setStarted(false);
+    setGuessCount(null);
+    setMatchedAt(null);
     setGuests([]);
     setSample(null);
   }
@@ -132,130 +212,339 @@ export function BirthdayLab() {
       ? "Hold the balloons — we found a matching pair!"
       : guests.length === 1
         ? "The first guest is here. Ring again."
-      : guests.length < 6
-        ? "A few guests in. A match still feels impossible."
-      : guests.length < 12
-        ? "The lawn is filling up. Every new guest checks every old card."
-      : guests.length < 23
-        ? "This is getting suspicious. Keep ringing."
-        : "Still no match in this one party. That is completely normal — try the whole neighborhood.";
+        : guests.length < 6
+          ? "A few guests in. A match still feels impossible."
+          : guests.length < 12
+            ? "The lawn is filling up. Every new guest checks every old card."
+            : guests.length < 23
+              ? "This is getting suspicious. Keep ringing."
+              : "Still no match in this one party. That is completely normal — try the whole neighborhood.";
 
-  return (
-    <section className="relative overflow-hidden rounded-[28px] border-[3px] border-slate-950 bg-[#fff4d9] text-slate-950 shadow-[8px_9px_0_#16243d]">
-      <div className="relative">
-        <header className="relative overflow-hidden border-b-[3px] border-slate-950 bg-[#ffe7a8] px-6 pt-8 pb-12 sm:px-10 sm:pt-12">
-          <div className="absolute -top-20 -left-16 size-48 rounded-full border-[3px] border-slate-950 bg-[#f9d552]" />
-          <div className="absolute top-5 right-[15%] size-24 rotate-12 rounded-full border-[3px] border-slate-950 bg-[#f5a5ca]" />
-          <div className="absolute top-16 right-7 size-16 -rotate-12 rounded-full border-[3px] border-slate-950 bg-[#b9e6a5]" />
-          <div className="relative max-w-2xl">
-            <p className="inline-flex items-center gap-2 rounded-full border-2 border-slate-950 bg-[#fff4d9] px-3 py-1 font-mono text-xs font-bold tracking-wider uppercase"><PartyPopper className="size-3.5" aria-hidden /> A tiny party game</p>
-            <h1 className="mt-4 font-heading text-5xl leading-[0.86] font-bold tracking-tight sm:text-7xl">The 23rd<br /><span className="text-[#d54187]">Guest</span></h1>
-            <p className="mt-5 max-w-lg text-lg leading-snug font-medium">Can you get two guests to share a birthday before the guest list hits 23?</p>
+  if (!started) {
+    return (
+      <div className="grid gap-6 sm:grid-cols-2 sm:items-center">
+        <div className="bg-background border-foreground/80 -rotate-1 rounded-2xl border-2 p-2.5 shadow-sm sm:p-3">
+          <div className="relative aspect-[4/3] w-full overflow-hidden rounded-lg">
+            <Image
+              src="/games/birthday-problem/garden-party-paper.png"
+              alt="A backyard birthday party, decorated and waiting for guests"
+              fill
+              sizes="(max-width: 640px) 100vw, 50vw"
+              className="object-cover"
+              priority
+            />
           </div>
-          <div className="absolute right-6 bottom-0 flex gap-5 text-4xl sm:right-10" aria-hidden><span>🎈</span><span className="translate-y-4">🎈</span><span>🎈</span></div>
-        </header>
+        </div>
 
-        <div className="relative">
-          <main
-            className="relative min-h-[650px] bg-cover bg-center p-5 sm:p-8"
-            style={{
-              backgroundImage:
-                "linear-gradient(180deg, rgba(255,244,217,0.12), rgba(255,244,217,0.03)), url('/games/birthday-problem/garden-party-paper.png')",
-            }}
+        <div className="border-foreground/80 bg-tile-1/40 flex flex-col items-start gap-4 rounded-2xl border-2 p-6">
+          <div className="flex -space-x-3">
+            {[1, 3, 0].map((spriteIndex) => (
+              <Face
+                key={spriteIndex}
+                index={spriteIndex}
+                className="border-background size-16 rounded-full border-2 shadow-sm"
+              />
+            ))}
+          </div>
+          <div>
+            <h2 className="font-heading text-2xl font-semibold">You&apos;re hosting.</h2>
+            <p className="text-foreground/80 mt-2 leading-relaxed">
+              Before you ring the bell — how many guests do you think it takes before two of them
+              share a birthday?
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {GUESS_ANCHORS.map((n) => (
+              <Button
+                key={n}
+                type="button"
+                variant={guessCount === n ? "default" : "outline"}
+                size="sm"
+                className={guessCount === n ? "bg-brand text-brand-foreground hover:bg-brand/90" : undefined}
+                onClick={() => setGuessCount(n)}
+              >
+                {n}
+              </Button>
+            ))}
+          </div>
+          <Button
+            type="button"
+            onClick={startParty}
+            disabled={guessCount === null}
+            className="bg-brand text-brand-foreground hover:bg-brand/90"
           >
-            {!started ? (
-              <div className="mx-auto flex min-h-[520px] max-w-xl flex-col items-center justify-center rounded-[2rem] border-[3px] border-slate-950 bg-[#fff4d9]/90 p-7 text-center shadow-[6px_7px_0_#16243d] backdrop-blur-[2px]">
-                <div className="relative mb-7 flex h-40 w-56 items-end justify-center gap-2 rounded-[45%_45%_12%_12%] border-[3px] border-slate-950 bg-[#f5a5ca] pt-10 shadow-[5px_6px_0_#16243d]">
-                  <span className="absolute -top-10 text-7xl">🎂</span>
-                  <Face index={1} /><Face index={3} /><Face index={0} />
-                </div>
-                <h2 className="font-heading text-3xl font-bold">You&apos;re hosting.</h2>
-                <p className="mt-3 max-w-md text-base leading-relaxed">Your job is simple: invite people, watch their birthday cards land, and see how long it takes until two dates match.</p>
-                <button type="button" onClick={startParty} className="mt-7 inline-flex items-center gap-2 rounded-xl border-[3px] border-slate-950 bg-[#f9d552] px-6 py-3 font-heading text-lg font-bold shadow-[4px_4px_0_#16243d] transition-transform hover:-translate-y-1 active:translate-x-1 active:translate-y-1 active:shadow-none">Open the door <ChevronRight className="size-5" aria-hidden /></button>
-                <p className="mt-5 text-sm text-slate-600">No formulas yet. Just throw a party.</p>
-              </div>
-            ) : (
-              <>
-                <div className="flex flex-wrap items-start justify-between gap-4 rounded-2xl border-2 border-slate-950 bg-[#fff4d9]/95 p-4 shadow-[3px_3px_0_#16243d]">
-                  <div><p className="font-heading text-2xl font-bold">{status}</p><p className="mt-1 text-sm">{guests.length === 1 ? "You have the first birthday card. One card cannot match itself." : `${newestGuest?.name} ${PARTY_MOMENTS[(guests.length - 1) % (PARTY_MOMENTS.length - 1) + 1]}`}</p><p className="mt-1 font-mono text-xs font-bold">{guests.length} guests · {pairCount.toLocaleString()} possible pairs</p></div>
-                  <button type="button" onClick={resetParty} className="inline-flex items-center gap-1.5 rounded-full border-2 border-slate-950 bg-white px-3 py-1.5 text-sm font-bold hover:bg-slate-100"><RotateCcw className="size-3.5" aria-hidden /> New party</button>
-                </div>
-
-                {hasMatch && (
-                  <div className="animate-in zoom-in-95 fade-in relative mt-5 overflow-hidden rounded-2xl border-[3px] border-slate-950 bg-[#f9d552] p-5 shadow-[4px_4px_0_#16243d]">
-                    <span className="absolute -top-3 right-4 text-5xl" aria-hidden>🎉</span>
-                    <p className="font-heading text-2xl font-bold">A match! The party did the thing.</p>
-                    <p className="mt-1 max-w-xl">You did not need to match <em>your</em> birthday. Any two guests could collide—and the room is secretly full of pairings.</p>
-                  </div>
-                )}
-
-                <div className="relative mt-6 h-[520px] overflow-hidden rounded-2xl border-[3px] border-slate-950/70 bg-[#b6df54]/35 shadow-[4px_4px_0_rgba(22,36,61,0.75)]">
-                  {guests.map((guest, index) => {
-                    const isMatch = matches.has(guest.birthday);
-                    const spot = PARTY_SPOTS[index]!;
-                    return (
-                      <article key={`${guest.name}-${index}`} className={`animate-in fade-in zoom-in-95 absolute w-24 -translate-x-1/2 -translate-y-1/2 rounded-xl border-[3px] border-slate-950 p-2 shadow-[3px_3px_0_#16243d] ${isMatch ? "ring-4 ring-[#d54187] ring-offset-2" : ""}`} style={{ backgroundColor: CARD_COLORS[index % CARD_COLORS.length], left: spot.left, top: spot.top }}>
-                        {isMatch && <span className="absolute -top-3 -right-2 rotate-12 rounded-full border-2 border-slate-950 bg-[#d54187] px-2 py-0.5 font-mono text-[10px] font-bold text-white">MATCH!</span>}
-                        <div className="flex items-center justify-between"><Face index={index} /><span className="font-mono text-xs font-bold opacity-60">#{index + 1}</span></div>
-                        <p className="mt-2 font-heading text-base leading-none font-bold">{guest.name}</p>
-                        <p className="mt-1 font-mono text-xs font-bold">{labelForDay(guest.birthday)}</p>
-                      </article>
-                    );
-                  })}
-                  {guests.length < 23 && (
-                    <button type="button" onClick={() => inviteGuests(1)} className="group absolute flex size-24 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border-[3px] border-dashed border-slate-950 bg-[#fff4d9]/90 p-2 text-center font-heading text-sm font-bold shadow-[3px_3px_0_#16243d] transition-transform hover:scale-110" style={nextSpot}>
-                      <span className="text-2xl" aria-hidden>+</span><span>put a friend here</span>
-                    </button>
-                  )}
-                </div>
-
-                {guests.length < 23 && (
-                  <p className="mt-4 text-center font-heading text-lg font-bold">Pick the next open spot on the lawn.</p>
-                )}
-
-                {guests.length >= 23 && (
-                  <div className="animate-in fade-in mt-8 rounded-2xl border-2 border-slate-950 bg-white p-5">
-                    <p className="font-heading text-xl font-bold">This one party can go either way.</p>
-                    <p className="mt-1 max-w-2xl">But at 23 guests, a shared birthday is already more likely than not. Want to stop trusting one party and ask the whole neighborhood?</p>
-                    <button type="button" onClick={surveyParties} className="mt-4 inline-flex items-center gap-2 rounded-lg border-2 border-slate-950 bg-[#f9d552] px-4 py-2 font-heading font-bold"><Sparkles className="size-4" aria-hidden /> Fast-forward 1,000 parties</button>
-                    {sample && <p className="animate-in fade-in mt-4 rounded-xl bg-[#16243d] px-4 py-3 font-heading text-lg text-white">{Math.round(sample.rate * sample.rooms).toLocaleString()} of {sample.rooms.toLocaleString()} parties had a match. That&apos;s <span className="text-[#f9d552]">{pct(sample.rate)}</span>.</p>}
-                  </div>
-                )}
-
-                {guests.length >= 23 && (
-                  <div className="animate-in slide-in-from-bottom-3 fade-in mt-6 rounded-2xl border-2 border-slate-950 bg-[#b7e5ff] p-5">
-                    <p className="font-heading text-xl font-bold">The reveal: it&apos;s the pairs.</p>
-                    <p className="mt-2">At 23 guests, there are 253 possible pairs. Instead of asking “will someone match me?”, the party is asking whether <em>any</em> of those 253 tiny chances lands. The clean math calculates the opposite—every birthday stays different—and gets 49.27%. So a match wins: 50.73%.</p>
-                    <p className="mt-3 text-sm">Keep going: 75 guests gives about a 99.97% chance. At 366 guests, a match is guaranteed.</p>
-                    {sample && (
-                      <div className="mt-5 border-t-2 border-slate-950/20 pt-4">
-                        <p className="font-heading text-lg font-bold">One last twist: real birthdays are not evenly spread out.</p>
-                        <p className="mt-1 text-sm">Late summer is a little busier; weekends and holidays are quieter. Unevenness makes matching slightly easier—but not enough to move the 23-person milestone.</p>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <button type="button" onClick={() => switchDistribution("uniform")} className={`rounded-lg border-2 border-slate-950 px-3 py-2 text-sm font-bold ${distribution === "uniform" ? "bg-[#f9d552]" : "bg-white"}`}>Keep every day equal</button>
-                          <button type="button" onClick={() => switchDistribution("us-pattern")} className={`rounded-lg border-2 border-slate-950 px-3 py-2 text-sm font-bold ${distribution === "us-pattern" ? "bg-[#f5a5ca]" : "bg-white"}`}>Try a real-world-ish bowl</button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </>
-            )}
-          </main>
-
-          <aside className="hidden border-t-[3px] border-slate-950 bg-[#16243d] p-6 text-white lg:border-t-0 lg:border-l-[3px]">
-            <p className="font-mono text-xs font-bold tracking-[0.16em] text-[#f9d552] uppercase">Party rules</p>
-            <h2 className="mt-2 font-heading text-2xl font-bold">Which birthday bowl?</h2>
-            <p className="mt-2 text-sm leading-relaxed text-slate-300">Try the classic puzzle first, then nudge reality into the room.</p>
-            <div className="mt-5 space-y-3">
-              <button type="button" onClick={() => switchDistribution("uniform")} className={`w-full rounded-xl border-2 p-3 text-left ${distribution === "uniform" ? "border-[#f9d552] bg-[#f9d552] text-slate-950" : "border-white/50 text-white"}`}><strong className="font-heading">Every day equal</strong><span className="mt-1 block text-xs opacity-80">The classic, clean version.</span></button>
-              <button type="button" onClick={() => switchDistribution("us-pattern")} className={`w-full rounded-xl border-2 p-3 text-left ${distribution === "us-pattern" ? "border-[#f5a5ca] bg-[#f5a5ca] text-slate-950" : "border-white/50 text-white"}`}><strong className="font-heading">Real-world-ish birthdays</strong><span className="mt-1 block text-xs opacity-80">Late summer is busier; weekends and holidays are quieter.</span></button>
-            </div>
-            {distribution === "us-pattern" && <p className="mt-6 rounded-xl border border-[#f5a5ca]/60 bg-[#f5a5ca]/10 p-3 text-sm leading-relaxed text-slate-200">Uneven birthdays make a match <em>more</em> likely, but normal real-world variation is not strong enough to move the 23-person milestone.</p>}
-            <div className="mt-8 border-t border-white/20 pt-5 text-sm leading-relaxed text-slate-300"><p className="font-heading text-lg text-white">A small clarification</p><p className="mt-1">Matching a specific birthday—say, yours—is a different game. It takes about 253 other people to make that more likely than not.</p></div>
-          </aside>
+            {guessCount === null ? "Pick a guess first" : `Open the door — I say ${guessCount}`}
+            <ChevronRight className="size-4" aria-hidden />
+          </Button>
+          <p className="text-foreground/60 text-sm">No formulas yet — just a guess, then a party.</p>
         </div>
       </div>
-    </section>
+    );
+  }
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
+      <div className="space-y-4">
+        <div className="border-foreground/80 bg-background flex flex-wrap items-start justify-between gap-4 rounded-2xl border-2 p-4 shadow-sm">
+          <div>
+            <p className="font-heading text-xl font-semibold">{status}</p>
+            <p className="text-foreground/70 mt-1 text-sm">
+              {guests.length === 1
+                ? "You have the first birthday card. One card cannot match itself."
+                : `${newestGuest?.name} ${PARTY_MOMENTS[(guests.length - 1) % (PARTY_MOMENTS.length - 1) + 1]}`}
+            </p>
+            <p className="text-foreground/50 mt-1.5 font-mono text-xs">
+              {guests.length} guests · {pairCount.toLocaleString()} possible pairs
+            </p>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            {guests.length < 23 && (
+              <Button type="button" variant="outline" size="sm" onClick={() => inviteGuests(5)}>
+                <UserPlus className="size-3.5" aria-hidden />
+                Invite 5 at once
+              </Button>
+            )}
+            <Button type="button" variant="outline" size="sm" onClick={resetParty}>
+              <RotateCcw className="size-3.5" aria-hidden />
+              New party
+            </Button>
+          </div>
+        </div>
+
+        {hasMatch && matchedAt !== null && (
+          <div className="animate-in zoom-in-95 fade-in border-foreground/80 bg-tile-4/50 relative rounded-2xl border-2 p-5">
+            <PartyPopper className="text-foreground/70 absolute top-4 right-4 size-6" aria-hidden />
+            <p className="font-heading text-xl font-semibold">A match! The party did the thing.</p>
+            <p className="mt-1 font-mono text-sm font-bold">
+              You guessed {guessCount}. It actually took{" "}
+              <span className="text-brand">{matchedAt}</span>
+              {guessCount !== null && matchedAt < guessCount
+                ? " — way sooner."
+                : guessCount !== null && matchedAt > guessCount
+                  ? " — later than you expected."
+                  : ". Right on the nose."}
+            </p>
+            <p className="text-foreground/80 mt-2 max-w-xl text-sm leading-relaxed">
+              You didn&rsquo;t need to match <em>your</em> birthday — that&rsquo;s the highlighted
+              line on the lawn below. Any two of those {pairCount.toLocaleString()} connections
+              could have lit up, and one did.
+            </p>
+          </div>
+        )}
+
+        <div className="border-foreground/80 bg-tile-2/30 relative mt-2 h-[440px] overflow-hidden rounded-2xl border-2">
+          <ConnectionsWeb guests={guests} matchedPair={matchedPair} />
+          {guests.map((guest, index) => {
+            const isMatch = matches.has(guest.birthday);
+            const spot = PARTY_SPOTS[index]!;
+            return (
+              <article
+                key={`${guest.name}-${index}`}
+                className={cn(
+                  "animate-in fade-in zoom-in-95 border-foreground/80 absolute w-24 -translate-x-1/2 -translate-y-1/2 rounded-xl border-2 p-1.5 shadow-sm",
+                  CARD_TILES[index % CARD_TILES.length],
+                  isMatch && "ring-brand ring-2 ring-offset-2",
+                )}
+                style={{ left: spot.left, top: spot.top }}
+              >
+                {isMatch && (
+                  <span className="bg-brand text-brand-foreground border-foreground/80 absolute -top-2.5 -right-2 rotate-6 rounded-full border px-1.5 py-0.5 font-mono text-[9px] font-bold">
+                    MATCH
+                  </span>
+                )}
+                <div className="flex items-center justify-between">
+                  <Face index={index} className="border-foreground/60 size-9 rounded-full border" />
+                  <span className="text-foreground/50 font-mono text-[10px]">#{index + 1}</span>
+                </div>
+                <p className="font-heading mt-1.5 truncate text-sm leading-none font-semibold">
+                  {guest.name}
+                </p>
+                <p className="text-foreground/70 mt-0.5 font-mono text-[10px]">
+                  {labelForDay(guest.birthday)}
+                </p>
+              </article>
+            );
+          })}
+          {guests.length < 23 && (
+            <button
+              type="button"
+              onClick={() => inviteGuests(1)}
+              className="border-foreground/50 bg-background/90 hover:bg-background absolute flex size-24 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border-2 border-dashed p-2 text-center text-sm font-medium shadow-sm transition-transform hover:scale-105"
+              style={nextSpot}
+            >
+              <span className="text-xl leading-none" aria-hidden>
+                +
+              </span>
+              put a friend here
+            </button>
+          )}
+        </div>
+
+        {guests.length < 23 && (
+          <p className="text-foreground/60 text-center text-sm">Pick the next open spot on the lawn.</p>
+        )}
+
+        {canContinueLesson && (
+          <div className="animate-in fade-in border-foreground/80 bg-tile-1/40 rounded-2xl border-2 p-5">
+            <p className="font-heading text-lg font-semibold">Was that luck?</p>
+            <p className="text-foreground/80 mt-1 max-w-2xl text-sm leading-relaxed">
+              One party can go either way. Ask the whole neighborhood what happens when every party
+              has {lessonSize} guests.
+            </p>
+            <Button type="button" onClick={surveyParties} className="mt-3">
+              <Sparkles className="size-4" aria-hidden />
+              Fast-forward 1,000 parties
+            </Button>
+            {sample && (
+              <p className="animate-in fade-in border-foreground/80 bg-background mt-4 rounded-xl border-2 px-4 py-3 text-sm">
+                {Math.round(sample.rate * sample.rooms).toLocaleString()} of{" "}
+                {sample.rooms.toLocaleString()} parties had a match. That&rsquo;s{" "}
+                <span className="text-brand font-semibold">{pct(sample.rate)}</span>.
+              </p>
+            )}
+          </div>
+        )}
+
+        {sample && (
+          <div className="animate-in slide-in-from-bottom-3 fade-in border-foreground/80 bg-tile-6/40 rounded-2xl border-2 p-5">
+            <p className="font-heading text-lg font-semibold">Now try other guest lists.</p>
+            <p className="text-foreground/70 mt-1 text-sm">
+              Before reading on — drag this and see where the odds actually move.
+            </p>
+            <div className="border-foreground/80 bg-background mt-3 rounded-xl border-2 p-4">
+              <div className="flex items-baseline justify-between gap-2">
+                <label htmlFor="explore-size" className="font-heading text-sm font-semibold">
+                  Guest list size
+                </label>
+                <span className="font-mono text-lg font-bold">
+                  {exploreSize} guests · <span className="text-brand">{pct(explorePct)}</span>
+                </span>
+              </div>
+              <input
+                id="explore-size"
+                type="range"
+                min={1}
+                max={100}
+                value={exploreSize}
+                onChange={(event) => setExploreSize(Number(event.target.value))}
+                className="mt-3 w-full"
+                style={{ accentColor: "var(--brand)" }}
+              />
+              <div className="border-foreground/40 bg-tile-2/20 mt-2 h-3 overflow-hidden rounded-full border">
+                <div
+                  className="bg-brand h-full transition-[width]"
+                  style={{ width: `${explorePct * 100}%` }}
+                />
+              </div>
+              <div className="mt-4">
+                <div className="flex items-baseline justify-between gap-3 text-xs">
+                  <span className="font-heading font-semibold">The web of possible matches</span>
+                  <span className="font-mono">{explorePairCount.toLocaleString()} pairs</span>
+                </div>
+                <div className="border-foreground/40 bg-background mt-1.5 h-2 overflow-hidden rounded-full border">
+                  <div
+                    className="bg-foreground/70 h-full transition-[width]"
+                    style={{ width: `${(explorePairCount / 4950) * 100}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {sample && (
+          <div className="animate-in slide-in-from-bottom-3 fade-in border-foreground/80 bg-tile-3/40 rounded-2xl border-2 p-5">
+            <p className="font-heading text-lg font-semibold">It&rsquo;s the pairs, not the people.</p>
+            <p className="text-foreground/80 mt-2 text-sm leading-relaxed">
+              That climb wasn&rsquo;t smooth — it&rsquo;s steepest right around 15&ndash;30 guests. Look
+              back at the lawn: every new guest draws a line to every guest already there, not just
+              one. At 23 people that&rsquo;s 253 lines, each one its own tiny chance of a match. Ask
+              &ldquo;will any of these 253 land&rdquo; instead of &ldquo;will someone match me,&rdquo;
+              and 50/50 by 23 stops being strange.
+            </p>
+            <div className="border-foreground/20 mt-4 border-t pt-4">
+              <p className="font-heading font-semibold">One more thing to try: uneven birthdays.</p>
+              <p className="text-foreground/70 mt-1 text-sm leading-relaxed">
+                Real birthdays aren&rsquo;t spread evenly across the year. Toggle the bowl, compare the
+                23-guest odds, and decide why the change is so small.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={distribution === "uniform" ? "default" : "outline"}
+                  className={distribution === "uniform" ? "bg-brand text-brand-foreground hover:bg-brand/90" : undefined}
+                  onClick={() => switchDistribution("uniform")}
+                >
+                  Keep every day equal
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={distribution === "us-pattern" ? "default" : "outline"}
+                  className={distribution === "us-pattern" ? "bg-brand text-brand-foreground hover:bg-brand/90" : undefined}
+                  onClick={() => switchDistribution("us-pattern")}
+                >
+                  Try a real-world-ish bowl
+                </Button>
+              </div>
+              <p className="text-foreground/70 mt-3 font-mono text-xs">
+                At 23 guests: {pct(exactUniformCollisionProbability(23))} with equal birthdays
+                {distribution === "us-pattern" && ` → ${pct(realWorld23Pct)} with this uneven bowl`}
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <aside className="border-foreground/80 bg-tile-5/30 h-fit rounded-2xl border-2 p-5">
+        <div className="border-foreground/80 bg-background mb-2 inline-flex size-9 items-center justify-center rounded-full border-2">
+          <Cake className="text-foreground size-4.5" aria-hidden />
+        </div>
+        <h2 className="font-heading text-lg font-semibold">Which birthday bowl?</h2>
+        <p className="text-foreground/70 mt-1 text-sm leading-relaxed">
+          Try the classic puzzle first, then nudge reality into the room.
+        </p>
+        <div className="mt-4 space-y-2">
+          <button
+            type="button"
+            onClick={() => switchDistribution("uniform")}
+            className={cn(
+              "border-foreground/80 w-full rounded-xl border-2 p-3 text-left transition-colors",
+              distribution === "uniform" ? "bg-tile-1" : "bg-background hover:bg-muted",
+            )}
+          >
+            <strong className="font-heading block text-sm">Every day equal</strong>
+            <span className="text-foreground/70 mt-0.5 block text-xs">The classic, clean version.</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => switchDistribution("us-pattern")}
+            className={cn(
+              "border-foreground/80 w-full rounded-xl border-2 p-3 text-left transition-colors",
+              distribution === "us-pattern" ? "bg-tile-4" : "bg-background hover:bg-muted",
+            )}
+          >
+            <strong className="font-heading block text-sm">Real-world-ish birthdays</strong>
+            <span className="text-foreground/70 mt-0.5 block text-xs">
+              Late summer is busier; weekends and holidays are quieter.
+            </span>
+          </button>
+        </div>
+        {distribution === "us-pattern" && (
+          <p className="border-foreground/20 text-foreground/70 mt-4 rounded-xl border p-3 text-xs leading-relaxed">
+            The milestone barely budged. What would have to change about the birthday bowl for it to
+            move a lot?
+          </p>
+        )}
+        <div className="border-foreground/20 text-foreground/70 mt-5 border-t pt-4 text-xs leading-relaxed">
+          <p className="font-heading text-foreground text-sm">A small clarification</p>
+          <p className="mt-1">
+            Matching a specific birthday — say, yours — is a different game. It takes about 253
+            other people to make that more likely than not.
+          </p>
+        </div>
+      </aside>
+    </div>
   );
 }

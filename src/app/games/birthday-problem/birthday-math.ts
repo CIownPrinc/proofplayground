@@ -67,6 +67,26 @@ export function exactUniformCollisionProbability(groupSize: number): number {
   return 1 - noMatch;
 }
 
+// For an uneven birthday bowl, sum every way `groupSize` distinct days can
+// be drawn. This keeps the comparison exact instead of using a noisy sample.
+export function exactCollisionProbability(groupSize: number, weights: number[]): number {
+  if (groupSize <= 1) return 0;
+  if (groupSize > weights.length) return 1;
+
+  const distinctDayWeightSums = Array.from({ length: groupSize + 1 }, () => 0);
+  distinctDayWeightSums[0] = 1;
+  for (const weight of weights) {
+    for (let size = groupSize; size >= 1; size -= 1) {
+      distinctDayWeightSums[size] =
+        distinctDayWeightSums[size]! + distinctDayWeightSums[size - 1]! * weight;
+    }
+  }
+
+  let arrangements = 1;
+  for (let size = 2; size <= groupSize; size += 1) arrangements *= size;
+  return 1 - arrangements * distinctDayWeightSums[groupSize]!;
+}
+
 function cumulativeWeights(weights: number[]): number[] {
   const cumulative: number[] = [];
   let total = 0;
